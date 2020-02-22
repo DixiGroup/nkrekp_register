@@ -40,17 +40,13 @@ contacts.columns = ["id", "title_short", "as_of", "title_full", "manager",
                      "phone", "fax", "working_area", "working_area_code"]
 lic.columns = ["authority", "id", "title_short", "license_id", "activity_sector", "activity_type",
                "license_valid",  "archive_n", "license_n", "reg_type", "comment", 
-               "start_date", "end_date", "stop_date", "reg_n", "reg_date", "reg_content", "letters",
+               "start_date", "stop_date", "end_date", "reg_n", "reg_date", "reg_content", "letters",
                "bank", "payment", "payment_deadline", "payment_info"]
 
 contacts_short = contacts[['id', 'title_short', 'title_full', 'as_of', 'activity_sector', 'activity_type',
                            'zip_code', 'address', 'mail', 'website']]
 lic_short = lic[['id', 'license_id', 'activity_sector', 'activity_type', 'license_valid',
            'reg_type', 'reg_n', 'reg_date', 'start_date', 'stop_date', 'end_date']]
-
-# use mail where there is no website
-contacts_short.loc[contacts_short['website'].isnull(), 'website'] = contacts_short['mail']
-contacts_short = contacts_short.drop('mail', axis = 1)
 
 # remove regulations with changes and rename regulation types
 lic_short = lic_short.loc[lic_short['reg_type']!='зміна']
@@ -97,19 +93,25 @@ register1['title_full'] = register1['title_full_x'].fillna(register1['title_full
 register1['zip_code'] = register1['zip_code_x'].fillna(register1['zip_code_y'])
 register1['address'] = register1['address_x'].fillna(register1['address_y'])
 register1['website'] = register1['website_x'].fillna(register1['website_y'])
+register1['mail'] = register1['mail_x'].fillna(register1['mail_y'])
 
 # reorder and rename columns
 
 register1 = register1[['id', 'title_full', 'activity_sector', 'activity_type',
                        'license_valid', 'reg_type', 'reg_n', 'reg_date',
                        'start_date', 'stop_date', 'end_date', 'zip_code',
-                       'address', 'website']]
+                       'address', 'website', 'mail']]
 
-register1.columns = ["Код ЄДРПОУ", "Повна назва компанії", "Сфера діяльності",
-                     "Вид діяльності", "Статус ліцензії", "Тип постанови",
-                     "Номер постанови", "Дата постанови", "Дата початку дії ліцензії",
-                     "Дата призупинення або відновлення дії ліцензії", "Дата закінчення дії ліцензії",
-                     "Поштовий індекс", "Юридична адреса", "Вебсайт"]
+register1['end_date'][register1['end_date']=='NaT'] = register1['end_date'].replace('NaT', np.nan)
+
+register1 = register1.drop_duplicates()
+
+register1.columns = ["Код згідно з ЄДРПОУ", "Повне найменування суб’єкта господарювання", 
+                     "Сфера діяльності", "Вид діяльності", "Статус ліцензії", "Тип рішення",
+                     "Номер рішення", "Дата рішення", "Дата початку дії ліцензії",
+                     "Дата зупинення або відновлення дії ліцензії", "Дата закінчення дії ліцензії",
+                     "Поштовий індекс", "Юридична адреса суб’єкта господарювання", 
+                     "Веб-сайт суб'єкта господарювання", "Електронна адреса суб'єкта господарювання"]
 
 # count valid licenses by company
 valid_only = lic[lic['license_valid']=='чинна']
@@ -122,8 +124,8 @@ register2['nr'] = register2['nr'].astype(str)
 
 # reorder and rename columns
 register2 = register2[['nr', 'id', 'title_full', 'n', 'address']]
-register2.columns = ["№", "Код ЄДРПОУ", "Повна назва компанії", "Кількість діючих ліцензій",
-                     "Юридична адреса"]
+register2.columns = ["№ з/п", "Код згідно з ЄДРПОУ", "Повне найменування суб’єкта господарювання", 
+                     "Кількість діючих ліцензій*", "Юридична адреса суб’єкта господарювання"]
 
 # change column types for all dataframes
 contacts = contacts.astype(str).replace('nan', np.nan)
@@ -132,7 +134,54 @@ lic = lic.astype(str).replace('nan', np.nan)
 register1 = register1.astype(str).replace('nan', np.nan)
 
 register2 = register2.astype(str).replace('nan', np.nan)
-register2['№'] = register2['№'].astype(int)
+register2['№ з/п'] = register2['№ з/п'].astype(int)
+
+# aggregation
+
+lic_for_aggr = lic[['reg_date', 'activity_sector', 'activity_type', 'reg_type']]
+lic_for_aggr['sector_type'] = lic_for_aggr['activity_sector'] + ' / ' + lic_for_aggr['activity_type']
+lic_for_aggr.drop(['activity_sector', 'activity_type'], axis = 1, inplace = True)
+lic_for_aggr.loc[lic_for_aggr['reg_type'].str.contains('анулювання'), 'reg_type'] = 'анулювання'
+lic_for_aggr['reg_type'] = lic_for_aggr['reg_type'].astype('category')
+cat_list = lic_for_aggr['reg_type'].cat.categories.to_list()
+new_categories = ["зупинення", "відновлення", "звуження", "розширення"]
+for cat in new_categories:
+    if cat not in cat_list:
+        lic_for_aggr['reg_type'] = lic_for_aggr['reg_type'].cat.add_categories(cat)
+lic_for_aggr['reg_count'] = 1
+aggr = lic_for_aggr.pivot_table(index = ['reg_date', 'sector_type'], columns = 'reg_type', values = 'reg_count', aggfunc = 'sum', dropna = False, fill_value = 0)
+aggr = pd.concat([aggr.index.to_frame(), aggr], axis = 1)
+aggr.reset_index(drop = True, inplace = True)
+aggr['reg_date'] = pd.to_datetime(aggr['reg_date'])
+aggr.set_index('reg_date', inplace = True)
+
+monthly = aggr.groupby(['sector_type']).resample('M').sum().reset_index()
+monthly['year'] = pd.DatetimeIndex(monthly['reg_date']).year
+monthly['month'] = pd.DatetimeIndex(monthly['reg_date']).month
+monthly['year'] = monthly['year'].astype(str)
+monthly['month'] = monthly['month'].astype(str).str.rjust(2, '0')
+monthly[['activity_sector', 'activity_type']] = monthly['sector_type'].str.split(' / ', expand = True)
+monthly = monthly[['year', 'month', 'activity_sector', 'activity_type', 'первинна',
+                   'анулювання', 'зміна', 'переоформлення', 'відмова',
+                   'зупинення', 'відновлення', 'звуження', 'розширення']]
+monthly.columns = ["Рік", "Місяць", "Сфера діяльності", "Вид діяльності",
+                   "Видано", "Анульовано", "Внесено змін", "Переоформлено", "Відмовлено",
+                   "Зупинено", "Відновлено", "Звужено", "Розширено"]
+monthly = monthly.sort_values(["Рік", "Місяць", "Сфера діяльності", "Вид діяльності"])
+
+quarterly = aggr.groupby(['sector_type']).resample('Q').sum().reset_index()
+quarterly['year'] = pd.DatetimeIndex(quarterly['reg_date']).year
+quarterly['quarter'] = pd.DatetimeIndex(quarterly['reg_date']).quarter
+quarterly['year'] = quarterly['year'].astype(str)
+quarterly['quarter'] = quarterly['quarter'].astype(str)
+quarterly[['activity_sector', 'activity_type']] = quarterly['sector_type'].str.split(' / ', expand = True)
+quarterly = quarterly[['year', 'quarter', 'activity_sector', 'activity_type', 'первинна',
+                   'анулювання', 'зміна', 'переоформлення', 'відмова',
+                   'зупинення', 'відновлення', 'звуження', 'розширення']]
+quarterly.columns = ["Рік", "Квартал", "Сфера діяльності", "Вид діяльності",
+                   "Видано", "Анульовано", "Внесено змін", "Переоформлено", "Відмовлено",
+                   "Зупинено", "Відновлено", "Звужено", "Розширено"]
+quarterly = quarterly.sort_values(["Рік", "Квартал", "Сфера діяльності", "Вид діяльності"])
 
 # column names for full register
 contacts.columns = ["Код ЄДРПОУ", "Скорочена назва", "Станом на", "Повна назва",  
@@ -145,7 +194,7 @@ contacts.columns = ["Код ЄДРПОУ", "Скорочена назва", "С�
 lic.columns = ["Орган, що видав ліцензію", "Код ЄДРПОУ", "Скорочена назва", "ID ліцензії",
                         "Сфера діяльності", "Вид діяльності", "Чинність ліцензії",
                         "Архівний номер", "№ бланку ліцензії", "Тип постанови", "Примітка",
-                        "Дата початку дії ліцензії", "Дата кінця дії ліцензії", "Дата призупинення/відновлення дії ліцензії",
+                        "Дата початку дії ліцензії", "Дата зупинення/відновлення дії ліцензії", "Дата кінця дії ліцензії",
                         "№ постанови", "Дата постанови", "Зміст постанови",
                         "Листи ліцензіата про зміни даних в документах, що додавалися до заяви на видачу ліцензії",
                         "Банківські реквізити ліцензіата", "Сума, сплачена за ліцензування",
@@ -171,9 +220,10 @@ writer.save()
 
 # register 2
 register2_text = "Реєстр суб'єктів господарювання, які провадять діяльність у сферах енергетики та комунальних послуг, діяльність яких регулюється НКРЕКП, станом на " + today1
+register2_comment = "* Більш детальну інформацію про діючі ліцензії необхідно дивитись в 'Ліцензійному реєстрі НКРЕКП'"
 register2_title = 'output/'+today2+'_register_companies.xlsx'
 writer = pd.ExcelWriter(register2_title)
-register2.to_excel(writer, startrow = 2, index = False)
+register2.to_excel(writer, startrow = 3, index = False)
 worksheet = writer.sheets['Sheet1']
 worksheet.set_column('A:A', 5)
 worksheet.set_column('B:B', 12)
@@ -181,6 +231,7 @@ worksheet.set_column('C:C', 50)
 worksheet.set_column('D:D', 15)
 worksheet.set_column('E:E', 55)
 worksheet.merge_range('A1:E1', register2_text)
+worksheet.merge_range('A2:E2', register2_comment)
 writer.save()
 
 # full register
@@ -220,4 +271,26 @@ worksheet2.set_column('Q:Q', 40)
 worksheet2.set_column('R:R', 20)
 worksheet2.set_column('S:S', 30)
 worksheet2.set_column('T:V', 10)
+writer.save()
+
+# monthly aggregation
+monthly_title = 'output/'+today2+'_monthly.xlsx'
+writer = pd.ExcelWriter(monthly_title)
+monthly.to_excel(writer, index = False)
+worksheet = writer.sheets['Sheet1']
+worksheet.set_column('A:B', 7)
+worksheet.set_column('C:C', 20)
+worksheet.set_column('D:D', 25)
+worksheet.set_column('E:M', 13)
+writer.save()
+
+# quarterly aggregation
+quarterly_title = 'output/'+today2+'_quarterly.xlsx'
+writer = pd.ExcelWriter(quarterly_title)
+quarterly.to_excel(writer, index = False)
+worksheet = writer.sheets['Sheet1']
+worksheet.set_column('A:B', 7)
+worksheet.set_column('C:C', 20)
+worksheet.set_column('D:D', 25)
+worksheet.set_column('E:M', 13)
 writer.save()
