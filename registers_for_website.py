@@ -113,12 +113,12 @@ problems_log.close()
 
 lic['reg_date'] = pd.to_datetime(lic['reg_date'], errors = 'coerce').dt.strftime('%Y-%m-%d')
 last_regs = lic.groupby(['license_id'])['reg_date'].max().reset_index()
-last_regs = pd.merge(last_regs, lic[['license_id', 'id', 'reg_date', 'activity_sector', 'activity_type', 'reg_type', 'end_date', 'license_valid']], 
+last_regs = pd.merge(last_regs, lic[['license_id', 'id', 'reg_date', 'activity_sector', 'activity_type', 'reg_type', 'end_date', 'license_valid', 'comment']], 
                      on = ['license_id', 'reg_date'], how = 'left')
 last_regs.loc[last_regs['reg_type'].str.contains('анулювання'), 'reg_type'] = 'анулювання'
 last_regs['end_date'] = pd.to_datetime(last_regs['end_date'], errors = 'coerce')
-valid_as_not_valid = last_regs[(last_regs['license_valid']=='не чинна') & (last_regs['reg_type']!='анулювання') & ((last_regs['end_date'].isnull())|(last_regs['end_date']>dt.date.today()))]
-not_valid_as_valid = last_regs[(last_regs['license_valid']=='чинна') & ((last_regs['reg_type']=='анулювання') | (last_regs['end_date']<=dt.date.today()))]
+valid_as_not_valid = last_regs[(last_regs['license_valid']=='не чинна') & (last_regs['reg_type']!='анулювання') & (last_regs['comment']!='зміна законодавства') & ((last_regs['end_date'].isnull())|(last_regs['end_date']>dt.date.today()))]
+not_valid_as_valid = last_regs[(last_regs['license_valid']=='чинна') & ((last_regs['reg_type']=='анулювання') | (last_regs['comment']=='зміна законодавства') | (last_regs['end_date']<=dt.date.today()))]
 valid_as_not_valid_list = ', '.join(valid_as_not_valid['license_id'])
 not_valid_as_valid_list = ', '.join(not_valid_as_valid['license_id'])
 
@@ -126,12 +126,12 @@ lic['reg_date'] = lic['reg_date'].astype(str)
 lic['reg_date'][lic['reg_date']=='NaT'] = lic['reg_date'].replace('NaT', np.nan)
 
 problems_log = open("output/problems_log.txt", "a", encoding = 'utf-8')
-problems_log.write("\nЛіцензії, які позначені як не чинні, але можуть бути чинними (немає постанови про анулювання або відповідної дати закінчення дії):\n")
+problems_log.write("\nЛіцензії, які позначені як не чинні, але можуть бути чинними (немає постанови про анулювання, запису про закінчення дії відповідно до закону або відповідної дати закінчення дії):\n")
 if(len(valid_as_not_valid_list) > 0):
     problems_log.write(valid_as_not_valid_list)
 else:
     problems_log.write('\n - немає')
-problems_log.write("\n\nЛіцензії, які позначені як чинні, але можуть бути не чинними (є постанова про анулювання або відповідна дата закінчення дії):\n")
+problems_log.write("\n\nЛіцензії, які позначені як чинні, але можуть бути не чинними (є постанова про анулювання, запис про закінчення дії відповідно до закону або відповідна дата закінчення дії):\n")
 if(len(not_valid_as_valid_list) > 0):
     problems_log.write(not_valid_as_valid_list)
 else:
@@ -175,6 +175,8 @@ last_contacts['as_of'] = last_contacts['as_of'].dt.strftime('%Y-%m-%d').astype(s
 last_contacts = pd.merge(last_contacts, contacts_short, on = ['id', 'activity_sector', 'activity_type', 'as_of'], how = 'left')
 last_contacts = last_contacts.groupby(['id', 'activity_sector', 'activity_type', 'as_of']).last().reset_index()
 last_contacts = last_contacts.drop('as_of', axis = 1)
+contacts['as_of'] = contacts['as_of'].astype(str)
+contacts['as_of'][contacts['as_of']=='NaT'] = contacts['as_of'].replace('NaT', np.nan)
 
 # last contacts by company (ignoring activity types)
 contacts_short = contacts_short.drop(['activity_sector', 'activity_type'], axis = 1)
@@ -200,6 +202,7 @@ register1 = register1[['id', 'title_full', 'activity_sector', 'activity_type',
                        'start_date', 'stop_date', 'end_date', 'zip_code',
                        'address', 'website', 'mail']]
 
+register1['reg_date'][register1['reg_date']=='NaT'] = register1['reg_date'].replace('NaT', np.nan)
 register1['end_date'][register1['end_date']=='NaT'] = register1['end_date'].replace('NaT', np.nan)
 
 register1 = register1.drop_duplicates()
