@@ -109,6 +109,20 @@ check_date_validity(lic, 'end_date')
 check_date_validity(lic, 'reg_date')
 problems_log.close()
 
+problems_log = open("output/problems_log.txt", "a", encoding = 'utf-8')
+problems_log.write("\n\nПОСТАНОВИ: \n\n")
+problems_log.close()
+check_id_length(lic)
+check_date_validity(lic, 'start_date', lic = True)
+check_date_validity(lic, 'stop_date')
+check_date_validity(lic, 'end_date')
+#problems_log = open("output/problems_log.txt", "a", encoding = 'utf-8')
+#problems_log.write("\n\nПОСТАНОВИ: \n\n")
+#
+#problems_log.close()
+check_date_validity(lic, 'reg_date')
+problems_log.close()
+
 # check license validity and write the results
 
 lic['reg_date'] = pd.to_datetime(lic['reg_date'], errors = 'coerce').dt.strftime('%Y-%m-%d')
@@ -144,12 +158,16 @@ problems_log.close()
 contacts_short = contacts[['id', 'title_short', 'title_full', 'as_of', 'activity_sector', 'activity_type',
                            'zip_code', 'address', 'mail', 'website']]
 lic_short = lic[['id', 'license_id', 'activity_sector', 'activity_type', 'license_valid',
-           'reg_type', 'reg_n', 'reg_date', 'start_date', 'stop_date', 'end_date']]
+           'reg_type', 'reg_n', 'reg_date', 'start_date', 'stop_date', 'end_date', 'comment']]
 
 # remove regulations with changes and rename regulation types
-lic_short = lic_short.loc[lic_short['reg_type']!='зміна']
+lic_short = lic_short.loc[~lic_short['reg_type'].isin(['зміна', 'не розглядалось'])]
 lic_short.loc[lic_short['reg_type'] == 'первинна', 'reg_type'] = 'видача'
 lic_short.loc[lic_short['reg_type'].str.contains('анулювання'), 'reg_type'] = 'анулювання'
+
+# filter "other" regulations
+lic_short = lic_short.loc[~((lic_short['reg_type']=='інше')&lic_short['comment'].isnull())]
+lic_short.loc[lic_short['reg_type']!='інше', 'comment'] = np.nan
 
 # remove old regulations (reset end dates by annul)
 annul = lic_short[lic_short['reg_type'] == 'анулювання']
@@ -200,7 +218,7 @@ register1['mail'] = register1['mail_x'].fillna(register1['mail_y'])
 register1 = register1[['id', 'title_full', 'activity_sector', 'activity_type',
                        'license_valid', 'reg_type', 'reg_n', 'reg_date',
                        'start_date', 'stop_date', 'end_date', 'zip_code',
-                       'address', 'website', 'mail']]
+                       'address', 'website', 'mail', 'comment']]
 
 register1['reg_date'][register1['reg_date']=='NaT'] = register1['reg_date'].replace('NaT', np.nan)
 register1['end_date'][register1['end_date']=='NaT'] = register1['end_date'].replace('NaT', np.nan)
@@ -212,21 +230,27 @@ register1.columns = ["Код згідно з ЄДРПОУ", "Повне найм
                      "Номер рішення", "Дата рішення", "Дата початку дії ліцензії",
                      "Дата зупинення або відновлення дії ліцензії", "Дата закінчення дії ліцензії",
                      "Поштовий індекс", "Юридична адреса суб’єкта господарювання", 
-                     "Веб-сайт суб'єкта господарювання", "Електронна адреса суб'єкта господарювання"]
+                     "Веб-сайт суб'єкта господарювання", "Електронна адреса суб'єкта господарювання",
+                     "Примітка"]
 
-# count valid licenses by company
+# count valid licenses by company, add all activity types
 valid_only = lic[lic['license_valid']=='чинна']
 license_count = valid_only.groupby(['id', 'license_id']).size().reset_index(name = 'n')
+license_acts = valid_only[['id', 'license_id', 'activity_type']].drop_duplicates()
+license_acts['activity_type'] = license_acts.groupby('id')['activity_type'].transform(lambda x: '; \n'.join(x))
+license_acts = license_acts[['id', 'activity_type']].drop_duplicates()
 comp_count = license_count.groupby('id').size().reset_index(name = 'n')
 register2 = pd.merge(comp_count, last_contacts2[['id', 'title_full', 'address']], 
                      on = 'id', how = 'left')
+register2 = pd.merge(register2, license_acts, on = 'id', how = 'left')
 register2['nr'] = register2.index+1
 register2['nr'] = register2['nr'].astype(str)
 
 # reorder and rename columns
-register2 = register2[['nr', 'id', 'title_full', 'n', 'address']]
+register2 = register2[['nr', 'id', 'title_full', 'n', 'activity_type', 'address']]
 register2.columns = ["№ з/п", "Код згідно з ЄДРПОУ", "Повне найменування суб’єкта господарювання", 
-                     "Кількість діючих ліцензій*", "Юридична адреса суб’єкта господарювання"]
+                     "Кількість діючих ліцензій*", "Діючі ліцензії",
+                     "Юридична адреса суб’єкта господарювання"]
 
 # change column types for all dataframes
 contacts = contacts.astype(str).replace('nan', np.nan)
@@ -239,18 +263,30 @@ register2['№ з/п'] = register2['№ з/п'].astype(int)
 
 # aggregation
 
-lic_for_aggr = lic[['reg_date', 'activity_sector', 'activity_type', 'reg_type']]
+lic_for_aggr = lic[['id', 'reg_n', 'reg_date', 'stop_date', 'activity_sector', 'activity_type', 'reg_type']]
+lic_for_aggr.loc[lic_for_aggr['reg_type'].isin(['зупинення дії', 'відновлення дії']), 'reg_date'] = \
+    lic_for_aggr.loc[lic_for_aggr['reg_type'].isin(['зупинення дії', 'відновлення дії']), 'stop_date']
+lic_for_aggr = lic_for_aggr.loc[~((lic_for_aggr['reg_type'] == 'інше') & \
+    (lic_for_aggr['reg_n'].isnull()|lic_for_aggr['reg_date'].isnull()))]
+other_dedup = lic_for_aggr.loc[lic_for_aggr['reg_type'] == 'інше'].drop_duplicates(subset = ['id', 'reg_n', 'reg_date'])
+lic_for_aggr = pd.concat([lic_for_aggr.loc[lic_for_aggr['reg_type'] != 'інше'], other_dedup])
 lic_for_aggr['sector_type'] = lic_for_aggr['activity_sector'] + ' / ' + lic_for_aggr['activity_type']
-lic_for_aggr.drop(['activity_sector', 'activity_type'], axis = 1, inplace = True)
+lic_for_aggr.drop(['reg_n', 'stop_date', 'activity_sector', 'activity_type'], axis = 1, inplace = True)
 lic_for_aggr.loc[lic_for_aggr['reg_type'].str.contains('анулювання'), 'reg_type'] = 'анулювання'
+lic_for_aggr.loc[lic_for_aggr['reg_type'] == 'зупинення дії', 'reg_type'] = 'зупинення'
+lic_for_aggr.loc[lic_for_aggr['reg_type'] == 'відновлення дії', 'reg_type'] = 'відновлення'
 lic_for_aggr['reg_type'] = lic_for_aggr['reg_type'].astype('category')
 cat_list = lic_for_aggr['reg_type'].cat.categories.to_list()
-new_categories = ["зупинення", "відновлення", "звуження", "розширення"]
+new_categories = ["зупинення", "відновлення", "звуження", "розширення",
+                  "заяву залишено без розгляду", "не розглядалось"]
 for cat in new_categories:
     if cat not in cat_list:
         lic_for_aggr['reg_type'] = lic_for_aggr['reg_type'].cat.add_categories(cat)
 lic_for_aggr['reg_count'] = 1
-aggr = lic_for_aggr.pivot_table(index = ['reg_date', 'sector_type'], columns = 'reg_type', values = 'reg_count', aggfunc = 'sum', dropna = False, fill_value = 0)
+
+aggr = lic_for_aggr.pivot_table(index = ['reg_date', 'sector_type'], columns = 'reg_type', 
+    values = 'reg_count', aggfunc = 'sum', dropna = False, fill_value = 0)
+
 aggr = pd.concat([aggr.index.to_frame(), aggr], axis = 1)
 aggr.reset_index(drop = True, inplace = True)
 aggr['reg_date'] = pd.to_datetime(aggr['reg_date'])
@@ -264,10 +300,12 @@ monthly['month'] = monthly['month'].astype(str).str.rjust(2, '0')
 monthly[['activity_sector', 'activity_type']] = monthly['sector_type'].str.split(' / ', expand = True)
 monthly = monthly[['year', 'month', 'activity_sector', 'activity_type', 'первинна',
                    'анулювання', 'зміна', 'переоформлення', 'відмова',
-                   'зупинення', 'відновлення', 'звуження', 'розширення']]
+                   'зупинення', 'відновлення', 'звуження', 'розширення', 
+                   'заяву залишено без розгляду', 'не розглядалось', 'інше']]
 monthly.columns = ["Рік", "Місяць", "Сфера діяльності", "Вид діяльності",
                    "Видано", "Анульовано", "Внесено змін", "Переоформлено", "Відмовлено",
-                   "Зупинено", "Відновлено", "Звужено", "Розширено"]
+                   "Зупинено", "Відновлено", "Звужено", "Розширено", "Заяву залишено без розгляду",
+                   "Не розглядалось", "Інше"]
 monthly = monthly.sort_values(["Рік", "Місяць", "Сфера діяльності", "Вид діяльності"])
 
 quarterly = aggr.groupby(['sector_type']).resample('Q').sum().reset_index()
@@ -278,10 +316,12 @@ quarterly['quarter'] = quarterly['quarter'].astype(str)
 quarterly[['activity_sector', 'activity_type']] = quarterly['sector_type'].str.split(' / ', expand = True)
 quarterly = quarterly[['year', 'quarter', 'activity_sector', 'activity_type', 'первинна',
                    'анулювання', 'зміна', 'переоформлення', 'відмова',
-                   'зупинення', 'відновлення', 'звуження', 'розширення']]
+                   'зупинення', 'відновлення', 'звуження', 'розширення',
+                   'заяву залишено без розгляду', 'не розглядалось', 'інше']]
 quarterly.columns = ["Рік", "Квартал", "Сфера діяльності", "Вид діяльності",
                    "Видано", "Анульовано", "Внесено змін", "Переоформлено", "Відмовлено",
-                   "Зупинено", "Відновлено", "Звужено", "Розширено"]
+                   "Зупинено", "Відновлено", "Звужено", "Розширено", "Заяву залишено без розгляду",
+                   "Не розглядалось", "Інше"]
 quarterly = quarterly.sort_values(["Рік", "Квартал", "Сфера діяльності", "Вид діяльності"])
 
 # remove working columns + column names for full register
@@ -385,6 +425,8 @@ worksheet.set_column('A:B', 7)
 worksheet.set_column('C:C', 20)
 worksheet.set_column('D:D', 25)
 worksheet.set_column('E:M', 13)
+worksheet.set_column('N:N', 24)
+worksheet.set_column('O:O', 15)
 writer.save()
 
 # quarterly aggregation
@@ -396,4 +438,6 @@ worksheet.set_column('A:B', 7)
 worksheet.set_column('C:C', 20)
 worksheet.set_column('D:D', 25)
 worksheet.set_column('E:M', 13)
+worksheet.set_column('N:N', 24)
+worksheet.set_column('O:O', 15)
 writer.save()
